@@ -163,17 +163,41 @@ def test(test_pts_filelist, model, args, save_results):
 def NTcrossentropy(vtx_feature, pts_feature, corr, tau=0.01):
     yi = vtx_feature[corr[:, 0]]
     yj = pts_feature[corr[:, 1]]
-    similarity_matrix = torch.matmul(F.normalize(yi, dim=1), F.normalize(yj, dim=1).T)
-    similarity_matrix /= tau
-    numerator = torch.exp(torch.diagonal(similarity_matrix))
-    denominator = torch.sum(torch.exp(similarity_matrix), dim=1)
+    sim_matrix = torch.matmul(F.normalize(yi, dim=1), F.normalize(yj, dim=1).T)
+    sim_matrix /= tau
+    numerator = torch.exp(torch.diagonal(sim_matrix))
+    denominator = torch.sum(torch.exp(sim_matrix), dim=1)
     loss = -torch.mean(torch.log(numerator / denominator))
     return loss
 
 # function to estimate a rotation matrix to align the vertices and the points based on the predicted reliable correspondences.
 # **** YOU SHOULD CHANGE THIS FUNCTION ****
 def fit_rotation(vtx, pts, vtx_feature, pts_feature, corrmask):
-    R = Rotation.from_matrix([[0,-1,0], [1, 0, 0], [0, 0, 1]])
+    sim_matrix = torch.matmul(vtx_feature, pts_feature.transpose(0, 1))
+    reliable_indices = corrmask > 0.5
+    sim_matrix = sim_matrix[reliable_indices]
+    vtx_pts = vtx[reliable_indices]
+    sim_indices = torch.argmax(sim_matrix, dim=1)
+    close_pts = pts[sim_indices]
+
+    mean_vtx = torch.mean(vtx_pts,0)
+    vtx = vtx_pts - mean_vtx
+    mean_pts = torch.mean(close_pts,0)
+    pts = close_pts - mean_pts
+    
+    norm = (torch.norm(vtx, p = 2)/torch.norm(pts, p = 2)) ** 1/4
+    mean_vtx /= norm
+    vtx -= mean_vtx
+    mean_pts /= norm
+    pts -= mean_pts
+    
+    s = torch.matmul(vtx.T, pts)   
+    u, _, v_T = torch.svd(s)
+    rotation_matrix = torch.matmul(u, v_T.T)
+    if (torch.det(rotation_matrix)) < 0:
+      v_T[2] = v_T[2]*-1
+    
+    R = Rotation.from_matrix(rotation_matrix.cpu().numpy())
     return R.as_quat()
     # keep the following line, transform the estimated to rotation matrix to a quaternion
     # the starter code handles the rest
